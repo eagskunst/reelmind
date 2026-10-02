@@ -25,7 +25,8 @@ def test_ask(client, fake_llm):
     fake_llm.text_responses = ["nothing saved yet"]
     res = client.post("/api/ask", json={"question": "hi"})
     assert res.status_code == 200
-    assert res.json()["answer"] == "nothing saved yet"
+    # no candidates -> deterministic empty answer (model not consulted)
+    assert "Nothing in your saved videos" in res.json()["answer"]
 
 
 def test_ask_returns_videos(client, storage, fake_llm):

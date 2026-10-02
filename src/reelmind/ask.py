@@ -32,6 +32,18 @@ class AskResult:
     usage: Usage = field(default_factory=Usage)
 
 
+def _normalize_plan(data: dict[str, Any]) -> dict[str, Any]:
+    """Small models return list fields as scalars; coerce before validation."""
+    data = dict(data)
+    for key in ("categories", "keywords"):
+        value = data.get(key)
+        if isinstance(value, str):
+            data[key] = [value]
+        elif value is not None and not isinstance(value, list):
+            data[key] = []
+    return data
+
+
 def _home_city(cfg: Config) -> str | None:
     if not cfg.user.home_location:
         return None
@@ -119,7 +131,7 @@ def ask(
     plan_data, u = llm.chat_json(cfg.llm.model, _plan_messages(question, cfg, today))
     total.prompt_tokens += u.prompt_tokens
     total.completion_tokens += u.completion_tokens
-    plan = QueryPlan.model_validate(plan_data)
+    plan = QueryPlan.model_validate(_normalize_plan(plan_data))
     storage.record_usage(cfg.llm.model, "plan", u)
 
     # Step 2: search with relaxation.
@@ -147,6 +159,18 @@ def ask(
         relaxed = "city"
         plan = plan.model_copy(update={"city": None})
         candidates = run(plan)
+
+    if not candidates:
+        # deterministic empty path — don't let the model hallucinate on []
+        return AskResult(
+            answer=(
+                "Nothing in your saved videos matches that question yet. "
+                "Try adding more videos or broadening the question."
+            ),
+            plan=plan,
+            relaxed=relaxed,
+            usage=total,
+        )
 
     compact = [_compact(v) for v in candidates]
 

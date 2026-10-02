@@ -29,6 +29,13 @@ def _ydl_opts(cfg: Config, platform_name: str, workdir: Path | None) -> dict[str
         "no_warnings": True,
         "noplaylist": True,
     }
+    try:
+        from yt_dlp.network.impersonation import ImpersonateTarget
+
+        # TikTok & co. block plain TLS fingerprints; impersonate a browser.
+        opts["impersonate"] = ImpersonateTarget.from_str("chrome")
+    except Exception:
+        pass  # curl-cffi not installed — plain requests still work for most sites
     if workdir is not None:
         opts["outtmpl"] = str(workdir / "media.%(ext)s")
         opts["format"] = FORMAT

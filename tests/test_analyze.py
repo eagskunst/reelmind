@@ -40,7 +40,9 @@ def test_retry_on_invalid(cfg, fake_llm):
 
 
 def test_double_failure_raises(cfg, fake_llm):
-    fake_llm.json_responses = [{"confidence": "x"}, {"confidence": "y"}]
+    # places entries that are strings can't be salvaged -> still invalid after retry
+    bad = valid_analysis_dict(places=["just a name, not an object"])
+    fake_llm.json_responses = [dict(bad), dict(bad)]
     with pytest.raises(ValidationError):
         analyze(fetched(), Transcript(), [], fake_llm, cfg)
 
@@ -62,6 +64,14 @@ def test_frames_sent_as_image_parts(cfg, fake_llm, tmp_path):
     # text part carries context
     text = next(c["text"] for c in content if c["type"] == "text")
     assert "2026-10-02" in text and "bob" in text
+
+
+def test_normalize_salvages_shape(cfg, fake_llm):
+    # small models often return places as a dict/string instead of a list
+    fake_llm.json_responses = [valid_analysis_dict(places={"name": "Solo Bar"}, confidence="0.8")]
+    analysis, _ = analyze(fetched(), Transcript(), [], fake_llm, cfg)
+    assert analysis.places[0].name == "Solo Bar"
+    assert analysis.confidence == 0.8
 
 
 def test_system_prompt_has_schema_and_categories(cfg):

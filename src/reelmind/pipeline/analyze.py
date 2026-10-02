@@ -67,6 +67,26 @@ Transcript (may be empty):
     ]
 
 
+def _normalize(data: dict[str, Any]) -> dict[str, Any]:
+    """Salvage common small-model deviations before validation."""
+    data = dict(data)
+    for field in ("places", "events", "key_points", "tags"):
+        value = data.get(field)
+        if isinstance(value, dict):
+            data[field] = [value]
+        elif value is not None and not isinstance(value, list):
+            data[field] = [value] if isinstance(value, str) else []
+        if isinstance(data.get(field), list):
+            data[field] = [v for v in data[field] if isinstance(v, (dict, str))]
+    conf = data.get("confidence")
+    if isinstance(conf, str):
+        try:
+            data["confidence"] = float(conf)
+        except ValueError:
+            data["confidence"] = 0.0
+    return data
+
+
 def _coerce_category(analysis: Analysis, cfg: Config) -> Analysis:
     if analysis.category not in cfg.categories:
         analysis.category = "other"
@@ -88,7 +108,7 @@ def analyze(
     total.prompt_tokens += usage.prompt_tokens
     total.completion_tokens += usage.completion_tokens
     try:
-        return _coerce_category(Analysis.model_validate(data), cfg), total
+        return _coerce_category(Analysis.model_validate(_normalize(data)), cfg), total
     except ValidationError as e:
         messages.append(
             {
@@ -102,5 +122,5 @@ def analyze(
         data, usage = llm.chat_json(cfg.llm.model, messages)
         total.prompt_tokens += usage.prompt_tokens
         total.completion_tokens += usage.completion_tokens
-        analysis = Analysis.model_validate(data)  # raises on second failure
+        analysis = Analysis.model_validate(_normalize(data))  # raises on second failure
         return _coerce_category(analysis, cfg), total
