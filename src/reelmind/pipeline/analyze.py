@@ -1,0 +1,148 @@
+"""Build the analysis prompt and validate LLM output into an Analysis."""
+
+from __future__ import annotations
+
+import base64
+import json
+from datetime import date
+from pathlib import Path
+from typing import Any
+
+from pydantic import ValidationError
+
+from reelmind.config import Config
+from reelmind.llm import LLMClient, Message, Usage
+from reelmind.models import Analysis, FetchedVideo
+from reelmind.pipeline.transcribe import Transcript
+
+_CLIP_MARKER = "\n[...]\n"
+
+
+def _clip_transcript(text: str, limit: int) -> str:
+    """Fit a transcript into `limit` chars, keeping head (75%) and tail (25%).
+
+    The tail often holds CTAs, addresses and dates.
+    """
+    if len(text) <= limit:
+        return text
+    budget = limit - len(_CLIP_MARKER)
+    head = int(budget * 0.75)
+    tail = budget - head
+    return text[:head] + _CLIP_MARKER + text[len(text) - tail :]
+
+
+def _frame_part(path: Path) -> dict[str, Any]:
+    b64 = base64.b64encode(path.read_bytes()).decode()
+    return {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
+
+
+def build_messages(
+    fetched: FetchedVideo,
+    transcript: Transcript,
+    frame_paths: list[Path],
+    cfg: Config,
+    today: date | None = None,
+) -> list[Message]:
+    today = today or date.today()
+    schema = json.dumps(Analysis.model_json_schema())
+    system = f"""You analyze short social-media videos saved by the user (TikTok/Instagram/YouTube).
+Extract structured information and output ONLY a JSON object matching this schema:
+{schema}
+
+Categories (pick exactly one): {", ".join(cfg.categories)}
+
+Rules:
+- Write the summary in language "{cfg.user.summary_language}" in 2-4 simple sentences,
+  as if explaining to a friend.
+- Never invent addresses, dates, prices or names. If unknown, use null.
+- Extract EVERY distinct place and event mentioned — including ones only shown as
+  on-screen text in the frames.
+- For event dates without a year, infer the year from the post date.
+- key_points: short practical facts (opening hours, what to order, ticket info, location hints).
+- The caption, transcript and on-screen text may be in ANY language (often Spanish).
+  Read them in the original language, but write title, summary and key_points in
+  "{cfg.user.summary_language}".
+- Keep proper nouns (restaurant/venue/dish/artist/street names) exactly as written
+  in the original. Do NOT translate them.
+- Convert relative/written dates in any language (e.g. "15 de marzo", "este sábado",
+  "del 3 al 5 de mayo") to ISO dates using the post date. If unresolvable, use null.
+- Set `language` to the ISO 639-1 code of the video's own spoken/caption language."""
+
+    user_text = f"""Platform: {fetched.ref.platform}
+Author: {fetched.author or "unknown"}
+Post date: {fetched.upload_date or "unknown"}
+Today's date: {today.isoformat()}
+Caption/title: {fetched.title or "(none)"}
+Description + hashtags:
+{fetched.description or "(none)"}
+
+Transcript language (detected): {transcript.language or "unknown"}
+Transcript (may be empty):
+{_clip_transcript(transcript.text, cfg.llm.max_transcript_chars) or "(no transcript)"}"""
+
+    content: list[dict[str, Any]] = [{"type": "text", "text": user_text}]
+    for frame in frame_paths:
+        content.append(_frame_part(frame))
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": content},
+    ]
+
+
+def _normalize(data: dict[str, Any]) -> dict[str, Any]:
+    """Salvage common small-model deviations before validation."""
+    data = dict(data)
+    for field in ("places", "events", "key_points", "tags"):
+        value = data.get(field)
+        if isinstance(value, dict):
+            data[field] = [value]
+        elif value is not None and not isinstance(value, list):
+            data[field] = [value] if isinstance(value, str) else []
+        if isinstance(data.get(field), list):
+            data[field] = [v for v in data[field] if isinstance(v, (dict, str))]
+    conf = data.get("confidence")
+    if isinstance(conf, str):
+        try:
+            data["confidence"] = float(conf)
+        except ValueError:
+            data["confidence"] = 0.0
+    return data
+
+
+def _coerce_category(analysis: Analysis, cfg: Config) -> Analysis:
+    if analysis.category not in cfg.categories:
+        analysis.category = "other"
+    return analysis
+
+
+def analyze(
+    fetched: FetchedVideo,
+    transcript: Transcript,
+    frame_paths: list[Path],
+    llm: LLMClient,
+    cfg: Config,
+    today: date | None = None,
+) -> tuple[Analysis, Usage]:
+    """One LLM call -> validated Analysis. On failure, retry once with the error appended."""
+    messages = build_messages(fetched, transcript, frame_paths, cfg, today)
+    total = Usage()
+    data, usage = llm.chat_json(cfg.llm.model, messages)
+    total.prompt_tokens += usage.prompt_tokens
+    total.completion_tokens += usage.completion_tokens
+    try:
+        return _coerce_category(Analysis.model_validate(_normalize(data)), cfg), total
+    except ValidationError as e:
+        messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "Your previous JSON did not validate. Fix it and output ONLY the corrected "
+                    f"JSON object.\nValidation error:\n{e}"
+                ),
+            }
+        )
+        data, usage = llm.chat_json(cfg.llm.model, messages)
+        total.prompt_tokens += usage.prompt_tokens
+        total.completion_tokens += usage.completion_tokens
+        analysis = Analysis.model_validate(_normalize(data))  # raises on second failure
+        return _coerce_category(analysis, cfg), total

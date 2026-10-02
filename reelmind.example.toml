@@ -1,0 +1,57 @@
+# reelmind example config — copy to ./reelmind.toml or ~/.config/reelmind/config.toml
+
+# data_dir = "~/.local/share/reelmind"
+# keep_media = false
+
+# --- Option A: Gemini free tier (default) ---
+# Get a key at https://aistudio.google.com/apikey, then: export GEMINI_API_KEY=...
+[llm]
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+model = "gemini-2.5-flash-lite"
+# answer_model = "gemini-2.5-flash-lite"
+api_key_env = "GEMINI_API_KEY"
+# max_transcript_chars = 12000   # ~3k tokens sent to the LLM; covers ~8 min of speech
+
+# --- Option B: OpenRouter ---
+# [llm]
+# base_url = "https://openrouter.ai/api/v1"
+# model = "google/gemini-2.5-flash-lite"
+# api_key_env = "OPENROUTER_API_KEY"
+
+# --- Option C: Ollama (fully free & local) ---
+# [llm]
+# base_url = "http://localhost:11434/v1"
+# model = "qwen3:8b"   # pull a model with JSON + vision support
+# api_key_env = "OLLAMA_API_KEY"   # any value works; Ollama ignores it
+
+# --- Option D: OpenAI ---
+# [llm]
+# base_url = "https://api.openai.com/v1"
+# model = "gpt-4.1-mini"
+# api_key_env = "OPENAI_API_KEY"
+
+[transcription]
+backend = "faster-whisper"   # faster-whisper | openai | none
+model = "small"
+device = "auto"
+compute_type = "int8"
+
+[frames]
+count = 4                 # min frames per video
+max_width = 512
+max_count = 8             # cap when scaling with duration
+seconds_per_frame = 20.0  # ~1 frame per N seconds, between count and max_count
+
+[user]
+home_location = "Madrid, Spain"
+summary_language = "en"
+
+# categories = ["restaurant", "cafe_bar", "event", "travel_place", "activity",
+#               "recipe", "shopping", "other"]
+
+# Instagram almost always needs cookies:
+# [platforms.instagram]
+# cookies_from_browser = "chrome"
+#
+# [platforms.tiktok]
+# cookies_from_browser = "chrome"
