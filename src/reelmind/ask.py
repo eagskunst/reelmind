@@ -172,7 +172,7 @@ def ask(
                 "Try adding more videos or broadening the question."
             ),
             plan=plan,
-            relaxed=relaxed,
+            relaxed=None,  # empty result isn't "found elsewhere" — nothing to explain
             usage=total,
         )
 

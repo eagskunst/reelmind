@@ -89,6 +89,26 @@ def test_search_upcoming(storage):
     assert len(undated_rows) == 1
 
 
+def test_migration_normalizes_empty_event_dates(tmp_path):
+    from reelmind.storage import SCHEMA_VERSION, Storage
+
+    db = tmp_path / "old.db"
+    s = Storage(db)  # fresh -> latest schema
+    pk = save(s, "1", Analysis(events=[Event(name="fair", start_date="2026-12-01")]))
+    # simulate legacy rows written by the buggy model version
+    s._conn.execute("UPDATE events SET start_date='', end_date='' WHERE video_pk=?", (pk,))
+    s._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION - 1}")
+    s._conn.commit()
+    s.close()
+
+    s2 = Storage(db)  # re-open -> migration cleans up
+    row = s2.get(pk)
+    assert row["events"][0]["start_date"] is None
+    res = s2.search(upcoming_only=True, today=date(2026, 10, 2))
+    assert [r["id"] for r in res] == [pk]  # unknown-date event included
+    s2.close()
+
+
 def test_fts_punctuation_no_crash(storage):
     save(storage, "1", Analysis(category="restaurant", title="Best 'sushi' & ramen!!"))
     for kw in (["sushi"], ['"weird"'], ["(broken"], ["sushi' OR 1=1"], ["&&&"]):

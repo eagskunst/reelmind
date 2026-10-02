@@ -73,10 +73,34 @@ const upcoming = document.getElementById('upcoming');
 const statusEl = document.getElementById('status');
 let activeCat = null;
 
-function esc(s){ const d=document.createElement('div'); d.textContent=s??''; return d.innerHTML; }
-function linkify(s){
-  return esc(s).replace(/https?:\/\/[^\s<]+/g,
-    u => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`);
+function esc(s){
+  return String(s ?? '').replace(/[&<>"']/g,
+    c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function safeUrl(u){
+  try { const p = new URL(u); return (p.protocol === 'http:' || p.protocol === 'https:') ? u : '#'; }
+  catch { return '#'; }
+}
+// build answer DOM without innerHTML: text nodes, <br>, and safe <a> elements
+function renderAnswer(box, text){
+  box.textContent = '';
+  const frag = document.createDocumentFragment();
+  const parts = String(text || '').split(/(https?:\/\/[^\s<>"']+)/g);
+  for (const part of parts){
+    if (/^https?:\/\//.test(part)){
+      const a = document.createElement('a');
+      a.href = safeUrl(part); a.textContent = part;
+      a.target = '_blank'; a.rel = 'noopener noreferrer';
+      frag.appendChild(a);
+    } else {
+      const lines = part.split('\n');
+      lines.forEach((line, i) => {
+        if (i > 0) frag.appendChild(document.createElement('br'));
+        frag.appendChild(document.createTextNode(line));
+      });
+    }
+  }
+  box.appendChild(frag);
 }
 function renderCard(v){
   const points = (v.key_points||[]).slice(0,3);
@@ -87,7 +111,7 @@ function renderCard(v){
     ${v.places?.length ? `<ul>${v.places.map(p=>`<li>📍 ${esc(p.name)}${p.city?', '+esc(p.city):''}</li>`).join('')}</ul>` : ''}
     ${v.events?.length ? `<ul>${v.events.map(e=>`<li>🗓 ${esc(e.name)}${e.start_date?' — '+esc(e.start_date):''}${(!e.start_date&&!e.end_date)?' <span class="undated">(date unknown)</span>':''}${e.city?', '+esc(e.city):''}</li>`).join('')}</ul>` : ''}
     ${points.length ? `<ul>${points.map(k=>`<li>✓ ${esc(k)}</li>`).join('')}</ul>` : ''}
-    <a href="${esc(v.url)}" target="_blank" rel="noopener">open video ↗</a>
+    <a href="${safeUrl(v.url)}" target="_blank" rel="noopener noreferrer">open video ↗</a>
   </div>`;
 }
 
@@ -122,8 +146,13 @@ document.getElementById('askBtn').onclick = async () => {
   answerGrid.innerHTML = '';
   const res = await fetch('/api/ask', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({question:q})});
   const data = await res.json();
-  answerBox.innerHTML = linkify(data.answer || '').replace(/\n/g, '<br>');
-  if (data.relaxed) answerBox.innerHTML += `<p class="undated">(relaxed ${esc(data.relaxed)} filter to find these)</p>`;
+  renderAnswer(answerBox, data.answer);
+  if (data.relaxed && data.videos?.length) {
+    const p = document.createElement('p');
+    p.className = 'undated';
+    p.textContent = `(relaxed ${data.relaxed} filter to find these)`;
+    answerBox.appendChild(p);
+  }
   answerGrid.innerHTML = (data.videos || []).map(renderCard).join('');
 };
 

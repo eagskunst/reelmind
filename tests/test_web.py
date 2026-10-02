@@ -20,6 +20,13 @@ def test_index(client):
     assert b"reelmind" in res.content
 
 
+def test_index_html_is_xss_safe(client):
+    html = client.get("/").text
+    assert 'href="${u}"' not in html  # old linkify interpolated urls raw
+    assert "safeUrl" in html
+    assert "renderAnswer" in html  # answer built via DOM nodes, not innerHTML
+
+
 def test_ask(client, fake_llm):
     fake_llm.json_responses = [{"categories": []}]
     fake_llm.text_responses = ["nothing saved yet"]
