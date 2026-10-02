@@ -111,7 +111,7 @@ function renderCard(v){
     ${v.places?.length ? `<ul>${v.places.map(p=>`<li>📍 ${esc(p.name)}${p.city?', '+esc(p.city):''}</li>`).join('')}</ul>` : ''}
     ${v.events?.length ? `<ul>${v.events.map(e=>`<li>🗓 ${esc(e.name)}${e.start_date?' — '+esc(e.start_date):''}${(!e.start_date&&!e.end_date)?' <span class="undated">(date unknown)</span>':''}${e.city?', '+esc(e.city):''}</li>`).join('')}</ul>` : ''}
     ${points.length ? `<ul>${points.map(k=>`<li>✓ ${esc(k)}</li>`).join('')}</ul>` : ''}
-    <a href="${safeUrl(v.url)}" target="_blank" rel="noopener noreferrer">open video ↗</a>
+    <a href="${esc(safeUrl(v.url))}" target="_blank" rel="noopener noreferrer">open video ↗</a>
   </div>`;
 }
 
