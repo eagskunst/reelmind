@@ -29,6 +29,8 @@ class LLMConfig(BaseModel):
     model: str = DEFAULT_MODEL
     answer_model: str | None = None  # defaults to `model` when unset
     api_key_env: str = "GEMINI_API_KEY"
+    # transcript chars sent to the LLM (~3k tokens; ~8min of speech headroom)
+    max_transcript_chars: int = 12000
 
     @property
     def answer_model_name(self) -> str:
@@ -52,6 +54,8 @@ class TranscriptionConfig(BaseModel):
 class FramesConfig(BaseModel):
     count: int = 4
     max_width: int = 512
+    max_count: int = 8  # cap when scaling with duration
+    seconds_per_frame: float = 20.0  # ~1 frame per N seconds, between count and max_count
 
 
 class UserConfig(BaseModel):
@@ -151,6 +155,7 @@ DEFAULT_CONFIG_TOML = """\
 # model = "gemini-2.5-flash-lite"
 # answer_model = "gemini-2.5-flash-lite"   # model used for answering questions
 # api_key_env = "GEMINI_API_KEY"           # env var to read the key from
+# max_transcript_chars = 12000             # ~3k tokens; covers ~8 min of speech
 #
 # Ollama (fully free & local):
 # base_url = "http://localhost:11434/v1"
@@ -166,8 +171,10 @@ DEFAULT_CONFIG_TOML = """\
 # compute_type = "int8"
 
 [frames]
-# count = 4          # frames extracted per video (on-screen text often has names/addresses)
+# count = 4          # min frames per video (on-screen text often has names/addresses)
 # max_width = 512    # pixels; keeps token cost low
+# max_count = 8      # cap when scaling with duration
+# seconds_per_frame = 20.0  # ~1 frame per N seconds of video, between count and max_count
 
 [user]
 # home_location = "Madrid, Spain"   # used when you ask "near me"

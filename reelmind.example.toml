@@ -10,6 +10,7 @@ base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
 model = "gemini-2.5-flash-lite"
 # answer_model = "gemini-2.5-flash-lite"
 api_key_env = "GEMINI_API_KEY"
+# max_transcript_chars = 12000   # ~3k tokens sent to the LLM; covers ~8 min of speech
 
 # --- Option B: OpenRouter ---
 # [llm]
@@ -36,8 +37,10 @@ device = "auto"
 compute_type = "int8"
 
 [frames]
-count = 4
+count = 4                 # min frames per video
 max_width = 512
+max_count = 8             # cap when scaling with duration
+seconds_per_frame = 20.0  # ~1 frame per N seconds, between count and max_count
 
 [user]
 home_location = "Madrid, Spain"

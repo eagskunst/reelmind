@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import shutil
 import subprocess
 from pathlib import Path
@@ -93,8 +94,29 @@ def extract_audio(media_path: Path, out_path: Path) -> Path | None:
     return out_path if proc.returncode == 0 and out_path.exists() else None
 
 
+def frame_count(
+    duration: float | None,
+    base: int,
+    max_count: int,
+    seconds_per_frame: float,
+) -> int:
+    """Frames to extract for a video of `duration` seconds.
+
+    `base` when duration unknown/zero; otherwise ~1 frame per
+    `seconds_per_frame` seconds, clamped to [base, max_count].
+    """
+    if duration is None or duration <= 0:
+        return base
+    return max(base, min(max_count, math.ceil(duration / seconds_per_frame)))
+
+
 def extract_frames(
-    media_path: Path, out_dir: Path, count: int = 4, max_width: int = 512
+    media_path: Path,
+    out_dir: Path,
+    count: int = 4,
+    max_width: int = 512,
+    max_count: int | None = None,
+    seconds_per_frame: float | None = None,
 ) -> list[Path]:
     """`count` frames evenly spaced over the video, skipping the first/last 5%.
 
@@ -104,6 +126,8 @@ def extract_frames(
     if "video" not in _stream_types(media_path):
         return []
     duration = ffprobe_duration(media_path)
+    if max_count is not None and seconds_per_frame is not None:
+        count = frame_count(duration, count, max_count, seconds_per_frame)
     if duration is None or duration <= 0 or duration < 1.0:
         # still image / unknown or negligible duration: grab whatever is there
         timestamps = []

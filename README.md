@@ -82,6 +82,11 @@ api_key_env = "OPENAI_API_KEY"
 
 ### Transcription
 
+Longer videos are handled too: transcripts are clipped to `llm.max_transcript_chars`
+(default 12000 ≈ 3k tokens, covering ~8 min of speech) keeping head *and* tail, and
+frame count scales with duration between `frames.count` and `frames.max_count`
+(~1 frame per `seconds_per_frame`).
+
 Default `faster-whisper` runs locally and is free. Tune in `[transcription]`:
 `backend = "faster-whisper" | "openai" | "none"`, `model = "small"` (whisper size,
 or API model name for the `openai` backend), `device`, `compute_type`.

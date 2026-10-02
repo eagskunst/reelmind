@@ -79,6 +79,8 @@ class Processor:
                     workdir / "frames",
                     count=self.cfg.frames.count,
                     max_width=self.cfg.frames.max_width,
+                    max_count=self.cfg.frames.max_count,
+                    seconds_per_frame=self.cfg.frames.seconds_per_frame,
                 )
                 audio = media.extract_audio(fetched.media_path, workdir / "audio.wav")
                 if audio is not None:

@@ -4,7 +4,12 @@ from pathlib import Path
 
 import pytest
 
-from reelmind.pipeline.media import extract_audio, extract_frames, ffprobe_duration
+from reelmind.pipeline.media import (
+    extract_audio,
+    extract_frames,
+    ffprobe_duration,
+    frame_count,
+)
 
 pytestmark = pytest.mark.skipif(
     shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None,
@@ -74,6 +79,38 @@ def test_no_audio_video(tmp_path):
     )
     assert extract_audio(out, tmp_path / "a.wav") is None
     assert extract_frames(out, tmp_path / "fr", count=2)
+
+
+def test_frame_count_scaling():
+    assert frame_count(None, 4, 8, 20.0) == 4
+    assert frame_count(0, 4, 8, 20.0) == 4
+    assert frame_count(30, 4, 8, 20.0) == 4
+    assert frame_count(60, 4, 8, 20.0) == 4
+    assert frame_count(180, 4, 8, 20.0) == 8  # 9 -> capped
+    assert frame_count(600, 4, 8, 20.0) == 8
+
+
+def test_frames_scale_with_duration(tmp_path):
+    # 3s test video: still under base count, but proves the kwargs path works
+    out = tmp_path / "v.mp4"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=duration=45:size=64x64:rate=10",
+            "-t",
+            "45",
+            str(out),
+        ],
+        check=True,
+    )
+    frames = extract_frames(out, tmp_path / "sc", count=2, max_count=5, seconds_per_frame=15.0)
+    assert len(frames) == 3  # ceil(45/15)=3, within [2,5]
 
 
 def test_still_image(tmp_path):

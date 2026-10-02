@@ -58,6 +58,15 @@ def test_ask_near_me_uses_home_location(cfg, storage, fake_llm):
     assert "Madrid" in plan_prompt
 
 
+def test_planner_prompt_bilingual_keywords(cfg, storage, fake_llm):
+    seed(storage)
+    fake_llm.json_responses = [{"categories": []}]
+    ask("restaurantes?", cfg, storage, fake_llm)
+    plan_prompt = fake_llm.json_calls[0][0]["content"]
+    assert "restaurante" in plan_prompt and "restaurant" in plan_prompt
+    assert "original language" in plan_prompt
+
+
 def test_query_plan_defaults():
     p = QueryPlan.model_validate({})
     assert p.categories == [] and p.upcoming_only is False and p.city is None

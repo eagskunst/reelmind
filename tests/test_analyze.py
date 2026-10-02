@@ -5,7 +5,7 @@ import pytest
 from pydantic import ValidationError
 
 from reelmind.models import Analysis, FetchedVideo, VideoRef
-from reelmind.pipeline.analyze import analyze, build_messages
+from reelmind.pipeline.analyze import _clip_transcript, analyze, build_messages
 from reelmind.pipeline.transcribe import Transcript
 
 from .conftest import valid_analysis_dict
@@ -72,6 +72,42 @@ def test_normalize_salvages_shape(cfg, fake_llm):
     analysis, _ = analyze(fetched(), Transcript(), [], fake_llm, cfg)
     assert analysis.places[0].name == "Solo Bar"
     assert analysis.confidence == 0.8
+
+
+def test_clip_transcript_keeps_head_and_tail():
+    text = "A" * 8000 + "B" * 8000
+    clipped = _clip_transcript(text, 1000)
+    assert "[...]" in clipped
+    assert len(clipped) <= 1000
+    assert clipped.startswith("A" * 100)
+    assert clipped.endswith("B" * 100)
+
+
+def test_clip_transcript_short_unchanged():
+    assert _clip_transcript("short", 1000) == "short"
+
+
+def test_build_messages_uses_config_limit(cfg):
+    cfg.llm.max_transcript_chars = 100
+    transcript = Transcript(text="x" * 500)
+    msgs = build_messages(fetched(), transcript, [], cfg)
+    text = next(c["text"] for c in msgs[1]["content"] if c["type"] == "text")
+    assert "[...]" in text
+    assert "x" * 200 not in text
+
+
+def test_detected_language_in_prompt(cfg):
+    msgs = build_messages(fetched(), Transcript(text="hola", language="es"), [], cfg)
+    text = next(c["text"] for c in msgs[1]["content"] if c["type"] == "text")
+    assert "Transcript language (detected): es" in text
+
+
+def test_spanish_rules_in_system_prompt(cfg):
+    msgs = build_messages(fetched(), Transcript(), [], cfg)
+    system = msgs[0]["content"]
+    assert "ANY language" in system
+    assert "proper nouns" in system
+    assert '"en"' in system  # summary_language value interpolated
 
 
 def test_system_prompt_has_schema_and_categories(cfg):

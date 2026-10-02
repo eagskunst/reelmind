@@ -15,7 +15,20 @@ from reelmind.llm import LLMClient, Message, Usage
 from reelmind.models import Analysis, FetchedVideo
 from reelmind.pipeline.transcribe import Transcript
 
-MAX_TRANSCRIPT_CHARS = 6000
+_CLIP_MARKER = "\n[...]\n"
+
+
+def _clip_transcript(text: str, limit: int) -> str:
+    """Fit a transcript into `limit` chars, keeping head (75%) and tail (25%).
+
+    The tail often holds CTAs, addresses and dates.
+    """
+    if len(text) <= limit:
+        return text
+    budget = limit - len(_CLIP_MARKER)
+    head = int(budget * 0.75)
+    tail = budget - head
+    return text[:head] + _CLIP_MARKER + text[len(text) - tail :]
 
 
 def _frame_part(path: Path) -> dict[str, Any]:
@@ -45,7 +58,15 @@ Rules:
 - Extract EVERY distinct place and event mentioned — including ones only shown as
   on-screen text in the frames.
 - For event dates without a year, infer the year from the post date.
-- key_points: short practical facts (opening hours, what to order, ticket info, location hints)."""
+- key_points: short practical facts (opening hours, what to order, ticket info, location hints).
+- The caption, transcript and on-screen text may be in ANY language (often Spanish).
+  Read them in the original language, but write title, summary and key_points in
+  "{cfg.user.summary_language}".
+- Keep proper nouns (restaurant/venue/dish/artist/street names) exactly as written
+  in the original. Do NOT translate them.
+- Convert relative/written dates in any language (e.g. "15 de marzo", "este sábado",
+  "del 3 al 5 de mayo") to ISO dates using the post date. If unresolvable, use null.
+- Set `language` to the ISO 639-1 code of the video's own spoken/caption language."""
 
     user_text = f"""Platform: {fetched.ref.platform}
 Author: {fetched.author or "unknown"}
@@ -55,8 +76,9 @@ Caption/title: {fetched.title or "(none)"}
 Description + hashtags:
 {fetched.description or "(none)"}
 
+Transcript language (detected): {transcript.language or "unknown"}
 Transcript (may be empty):
-{transcript.text[:MAX_TRANSCRIPT_CHARS] or "(no transcript)"}"""
+{_clip_transcript(transcript.text, cfg.llm.max_transcript_chars) or "(no transcript)"}"""
 
     content: list[dict[str, Any]] = [{"type": "text", "text": user_text}]
     for frame in frame_paths:

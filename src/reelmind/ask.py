@@ -65,6 +65,10 @@ Rules:
   (currently: {_home_city(cfg) or "unknown — leave city null"}).
 - upcoming_only = true when the question is about future/current events.
 - keywords: a few meaningful search words (foods, names, vibes). Empty list is fine.
+  Include each term both in the question's language and in
+  "{cfg.user.summary_language}" when they differ (e.g. "restaurante" and
+  "restaurant") — transcripts are stored in the original language while
+  summaries are stored in {cfg.user.summary_language}.
 - Output ONLY the JSON object."""
     return [
         {"role": "system", "content": system},
