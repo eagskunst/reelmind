@@ -64,12 +64,16 @@ class TikTokPlatform(YtDlpPlatform):
         workdir.mkdir(parents=True, exist_ok=True)
         opts = _ydl_opts(cfg, self.name, workdir)
         opts.pop("format", None)  # FORMAT has no meaning for image posts
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(ref.url, download=True)
-            if info is None:
-                raise RuntimeError(f"yt-dlp returned no info for {ref.url}")
-            media = self._find_media(ydl, info, workdir)
-        fetched = self._to_fetched(info, media, ref)
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(ref.url, download=True)
+                if info is None:
+                    raise RuntimeError(f"yt-dlp returned no info for {ref.url}")
+                entry = self._pick_entry(ydl, info, workdir)
+                media = self._find_media(ydl, entry or info, workdir)
+        except Exception as e:
+            raise self._with_hint(e, cfg) from e
+        fetched = self._to_fetched(info, media, ref, entry)
         fetched.ref.video_id = str(info.get("id") or ref.video_id.removeprefix("photo-"))
         return fetched
 

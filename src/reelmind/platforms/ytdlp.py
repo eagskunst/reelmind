@@ -55,16 +55,65 @@ class YtDlpPlatform(Platform):
         import yt_dlp
 
         workdir.mkdir(parents=True, exist_ok=True)
-        with yt_dlp.YoutubeDL(_ydl_opts(cfg, self.name, workdir)) as ydl:
-            info = ydl.extract_info(ref.url, download=True)
-            if info is None:
-                raise RuntimeError(f"yt-dlp returned no info for {ref.url}")
-            media_path = self._find_media(ydl, info, workdir)
-        return self._to_fetched(info, media_path, ref)
+        try:
+            with yt_dlp.YoutubeDL(_ydl_opts(cfg, self.name, workdir)) as ydl:
+                info = ydl.extract_info(ref.url, download=True)
+                if info is None:
+                    raise RuntimeError(f"yt-dlp returned no info for {ref.url}")
+                entry = self._pick_entry(ydl, info, workdir)
+                media_path = self._find_media(ydl, entry or info, workdir)
+        except Exception as e:
+            raise self._with_hint(e, cfg) from e
+        return self._to_fetched(info, media_path, ref, entry)
+
+    def _with_hint(self, error: Exception, cfg: Config) -> Exception:
+        """Attach a cookies hint to login/auth download failures for any platform."""
+        msg = str(error)
+        loginish = any(
+            s in msg.lower()
+            for s in ("login", "cookie", "log in", "private", "sign in", "rate-limit", "403")
+        )
+        if not loginish:
+            return error
+        pc = cfg.platform_config(self.name)
+        has_cookies = bool(pc.cookies_from_browser or pc.cookies_file)
+        hint = (
+            f"{self.name} may require login cookies (already configured — "
+            "check they are still valid)"
+            if has_cookies
+            else (
+                f"{self.name} may require cookies: set [platforms.{self.name}] "
+                "cookies_from_browser or cookies_file"
+            )
+        )
+        return RuntimeError(f"{hint}. Original error: {msg}")
+
+    def _pick_entry(self, ydl: Any, info: dict[str, Any], workdir: Path) -> dict[str, Any] | None:
+        """For playlist/carousel results (e.g. Instagram carousels, TikTok photos),
+        return the first entry whose downloaded file exists."""
+        entries = info.get("entries")
+        if not entries:
+            return None
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            path = self._entry_filepath(ydl, entry)
+            if path is not None and path.exists():
+                return entry
+        return entries[0] if isinstance(entries[0], dict) else None
+
+    def _entry_filepath(self, ydl: Any, entry: dict[str, Any]) -> Path | None:
+        rds = entry.get("requested_downloads") or []
+        if rds and rds[0].get("filepath"):
+            return Path(rds[0]["filepath"])
+        try:
+            return Path(ydl.prepare_filename(entry))
+        except Exception:
+            return None
 
     def _find_media(self, ydl: Any, info: dict[str, Any], workdir: Path) -> Path | None:
-        path = Path(ydl.prepare_filename(info))
-        candidates = [path, *path.with_suffix(".mp4").parent.glob(f"{path.stem}.*")]
+        path = self._entry_filepath(ydl, info) or Path(ydl.prepare_filename(info))
+        candidates = [path, *path.parent.glob(f"{path.stem}.*")]
         for cand in candidates:
             if cand.exists() and cand.suffix.lower() not in (".part", ".ytdl"):
                 return cand
@@ -74,8 +123,17 @@ class YtDlpPlatform(Platform):
         return files[0] if files else None
 
     def _to_fetched(
-        self, info: dict[str, Any], media_path: Path | None, ref: VideoRef
+        self,
+        info: dict[str, Any],
+        media_path: Path | None,
+        ref: VideoRef,
+        entry: dict[str, Any] | None = None,
     ) -> FetchedVideo:
+        if entry:
+            # top-level playlist info wins; entry fills in missing fields
+            merged = dict(entry)
+            merged.update({k: v for k, v in info.items() if v is not None})
+            info = merged
         upload = info.get("upload_date")  # YYYYMMDD
         if upload and re.fullmatch(r"\d{8}", str(upload)):
             upload = f"{upload[:4]}-{upload[4:6]}-{upload[6:8]}"

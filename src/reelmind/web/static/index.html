@@ -17,7 +17,8 @@
   .askbox input { flex:1; padding:.75rem 1rem; font-size:1rem; border:1px solid var(--border); border-radius:.6rem; background:var(--card); color:var(--fg); }
   button { padding:.6rem 1rem; border:0; border-radius:.6rem; background:var(--accent); color:#fff; cursor:pointer; font-size:.95rem; }
   button:disabled { opacity:.5; }
-  #answer { margin-top:1rem; padding:1rem; background:var(--card); border:1px solid var(--border); border-radius:.6rem; white-space:pre-wrap; display:none; }
+  #answer { margin-top:1rem; padding:1rem; background:var(--card); border:1px solid var(--border); border-radius:.6rem; display:none; line-height:1.5; }
+  #answer a { color:var(--accent); word-break:break-all; }
   .bar { display:flex; flex-wrap:wrap; gap:.5rem; margin:1.25rem 0; align-items:center; }
   .chips { display:flex; flex-wrap:wrap; gap:.4rem; }
   .chip { padding:.3rem .8rem; border:1px solid var(--border); border-radius:999px; background:var(--card); color:var(--fg); cursor:pointer; font-size:.85rem; }
@@ -45,6 +46,7 @@
     <button id="askBtn">Ask</button>
   </div>
   <div id="answer"></div>
+  <div class="grid" id="answerGrid"></div>
 
   <details class="add">
     <summary>Add links</summary>
@@ -63,22 +65,45 @@
 </main>
 <script>
 const grid = document.getElementById('grid');
+const answerBox = document.getElementById('answer');
+const answerGrid = document.getElementById('answerGrid');
 const chips = document.getElementById('chips');
 const search = document.getElementById('search');
 const upcoming = document.getElementById('upcoming');
+const statusEl = document.getElementById('status');
 let activeCat = null;
-const cats = ["restaurant","cafe_bar","event","travel_place","activity","recipe","shopping","other"];
-
-cats.forEach(c => {
-  const b = document.createElement('button');
-  b.className = 'chip'; b.textContent = c.replace('_',' ');
-  b.onclick = () => { activeCat = (activeCat === c ? null : c);
-    [...chips.children].forEach(x => x.classList.toggle('active', x.textContent.replace(' ','_') === activeCat));
-    load(); };
-  chips.appendChild(b);
-});
 
 function esc(s){ const d=document.createElement('div'); d.textContent=s??''; return d.innerHTML; }
+function linkify(s){
+  return esc(s).replace(/https?:\/\/[^\s<]+/g,
+    u => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`);
+}
+function renderCard(v){
+  const points = (v.key_points||[]).slice(0,3);
+  return `<div class="card">
+    <span class="badge">${esc(v.category)}</span>
+    <h3>${esc(v.title || v.url)}</h3>
+    <p>${esc(v.summary)}</p>
+    ${v.places?.length ? `<ul>${v.places.map(p=>`<li>📍 ${esc(p.name)}${p.city?', '+esc(p.city):''}</li>`).join('')}</ul>` : ''}
+    ${v.events?.length ? `<ul>${v.events.map(e=>`<li>🗓 ${esc(e.name)}${e.start_date?' — '+esc(e.start_date):''}${(!e.start_date&&!e.end_date)?' <span class="undated">(date unknown)</span>':''}${e.city?', '+esc(e.city):''}</li>`).join('')}</ul>` : ''}
+    ${points.length ? `<ul>${points.map(k=>`<li>✓ ${esc(k)}</li>`).join('')}</ul>` : ''}
+    <a href="${esc(v.url)}" target="_blank" rel="noopener">open video ↗</a>
+  </div>`;
+}
+
+async function initChips() {
+  const res = await fetch('/api/config');
+  const conf = await res.json();
+  (conf.categories || []).forEach(c => {
+    const b = document.createElement('button');
+    b.className = 'chip'; b.textContent = c.replaceAll('_',' ');
+    b.dataset.cat = c;
+    b.onclick = () => { activeCat = (activeCat === c ? null : c);
+      [...chips.children].forEach(x => x.classList.toggle('active', x.dataset.cat === activeCat));
+      load(); };
+    chips.appendChild(b);
+  });
+}
 
 async function load() {
   const p = new URLSearchParams();
@@ -87,40 +112,49 @@ async function load() {
   if (upcoming.checked) p.set('upcoming', 'true');
   const res = await fetch('/api/videos?' + p);
   const vids = await res.json();
-  grid.innerHTML = vids.map(v => `
-    <div class="card">
-      <span class="badge">${esc(v.category)}</span>
-      <h3>${esc(v.title || v.url)}</h3>
-      <p>${esc(v.summary)}</p>
-      ${v.places?.length ? `<ul>${v.places.map(p=>`<li>📍 ${esc(p.name)}${p.city?', '+esc(p.city):''}</li>`).join('')}</ul>` : ''}
-      ${v.events?.length ? `<ul>${v.events.map(e=>`<li>🗓 ${esc(e.name)}${e.start_date?' — '+esc(e.start_date):''}${(!e.start_date&&!e.end_date)?' <span class="undated">(date unknown)</span>':''}${e.city?', '+esc(e.city):''}</li>`).join('')}</ul>` : ''}
-      <a href="${esc(v.url)}" target="_blank" rel="noopener">open video ↗</a>
-    </div>`).join('') || '<p>No videos yet. Add some links above.</p>';
+  grid.innerHTML = vids.map(renderCard).join('') || '<p>No videos yet. Add some links above.</p>';
 }
 
 document.getElementById('askBtn').onclick = async () => {
   const q = document.getElementById('q').value.trim();
   if (!q) return;
-  const box = document.getElementById('answer');
-  box.style.display = 'block'; box.textContent = 'Thinking…';
+  answerBox.style.display = 'block'; answerBox.textContent = 'Thinking…';
+  answerGrid.innerHTML = '';
   const res = await fetch('/api/ask', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({question:q})});
   const data = await res.json();
-  box.textContent = data.answer;
+  answerBox.innerHTML = linkify(data.answer || '').replace(/\n/g, '<br>');
+  if (data.relaxed) answerBox.innerHTML += `<p class="undated">(relaxed ${esc(data.relaxed)} filter to find these)</p>`;
+  answerGrid.innerHTML = (data.videos || []).map(renderCard).join('');
 };
+
+let pollTimer = null;
+async function pollStatus() {
+  const res = await fetch('/api/status');
+  const s = await res.json();
+  if (s.pending > 0) {
+    statusEl.textContent = `${s.pending} processing, ${s.failed} failed`;
+    pollTimer = setTimeout(pollStatus, 3000);
+  } else {
+    statusEl.textContent = s.failed ? `${s.failed} failed` : '';
+    pollTimer = null;
+    load();
+  }
+}
 
 document.getElementById('addBtn').onclick = async () => {
   const urls = document.getElementById('addUrls').value.split('\n').map(s=>s.trim()).filter(Boolean);
   if (!urls.length) return;
   const res = await fetch('/api/add', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({urls})});
   const data = await res.json();
-  document.getElementById('status').textContent = `Enqueued ${data.enqueued} new video(s). Processing in background…`;
+  statusEl.textContent = `Enqueued ${data.enqueued} new video(s)` + (data.lists ? `, ${data.lists} list(s) expanding` : '');
   document.getElementById('addUrls').value = '';
-  setTimeout(load, 3000);
+  if (!pollTimer) pollTimer = setTimeout(pollStatus, 1000);
 };
 
 search.addEventListener('input', () => load());
 upcoming.addEventListener('change', () => load());
-load();
+initChips().then(load);
+pollStatus();
 </script>
 </body>
 </html>

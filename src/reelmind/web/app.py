@@ -13,8 +13,8 @@ from pydantic import BaseModel
 from reelmind.ask import ask as run_ask
 from reelmind.config import Config
 from reelmind.llm import LLMClient
+from reelmind.models import VideoRef
 from reelmind.pipeline.processor import Processor
-from reelmind.platforms import default_registry
 from reelmind.storage import Storage
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -37,10 +37,18 @@ def create_app(
     app = FastAPI(title="reelmind")
     lock = threading.Lock()
     worker: dict[str, threading.Thread | None] = {"t": None}
+    registry = processor.registry
 
     @app.get("/", include_in_schema=False)
     def index() -> FileResponse:
         return FileResponse(STATIC_DIR / "index.html")
+
+    @app.get("/api/config")
+    def get_config() -> dict[str, Any]:
+        return {
+            "categories": cfg.categories,
+            "home_location": cfg.user.home_location,
+        }
 
     @app.get("/api/videos")
     def list_videos(
@@ -70,25 +78,39 @@ def create_app(
     def ask(body: AskBody) -> dict[str, Any]:
         with lock:
             result = run_ask(body.question, cfg, storage, llm)
-        return {"answer": result.answer, "video_ids": result.video_ids, "relaxed": result.relaxed}
+        videos = [v for vid in result.video_ids[:10] if (v := storage.get(vid)) is not None]
+        return {
+            "answer": result.answer,
+            "video_ids": result.video_ids,
+            "relaxed": result.relaxed,
+            "videos": videos,
+        }
 
     @app.post("/api/add")
     def add(body: AddBody) -> dict[str, Any]:
-        refs = []
+        refs: list[VideoRef] = []
+        list_urls: list[tuple[Any, str]] = []  # (platform, url) to expand in worker
         for url in body.urls:
             url = url.strip()
             if not url:
                 continue
-            platform = default_registry.for_url(url)
+            platform = registry.for_url(url)
             if platform is None:
                 continue
             ref = platform.parse(url)
             if ref is not None:
                 refs.append(ref)
+            else:
+                list_urls.append((platform, url))
         new = processor.enqueue(refs)
 
         def work() -> None:
             try:
+                for platform, url in list_urls:
+                    try:
+                        processor.enqueue(platform.expand(url, cfg))
+                    except Exception:  # noqa: BLE001 — keep going
+                        continue
                 processor.process_pending()
             finally:
                 worker["t"] = None
@@ -97,7 +119,7 @@ def create_app(
         if t is None or not t.is_alive():
             worker["t"] = threading.Thread(target=work, daemon=True)
             worker["t"].start()  # type: ignore[union-attr]
-        return {"enqueued": new, "queued": len(refs)}
+        return {"enqueued": new, "queued": len(refs), "lists": len(list_urls)}
 
     @app.get("/api/status")
     def status() -> dict[str, Any]:

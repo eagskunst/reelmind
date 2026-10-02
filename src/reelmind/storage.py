@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import date, datetime
@@ -66,6 +67,7 @@ def _quote_fts(term: str) -> str:
 class Storage:
     def __init__(self, db_path: Path) -> None:
         db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.RLock()  # one shared connection, guarded
         self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
@@ -76,12 +78,13 @@ class Storage:
 
     @contextmanager
     def _tx(self) -> Iterator[sqlite3.Connection]:
-        try:
-            yield self._conn
-            self._conn.commit()
-        except Exception:
-            self._conn.rollback()
-            raise
+        with self._lock:
+            try:
+                yield self._conn
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
 
     def _migrate(self) -> None:
         version = self._conn.execute("PRAGMA user_version").fetchone()[0]
@@ -94,13 +97,14 @@ class Storage:
 
     def add_pending(self, ref: VideoRef) -> bool:
         """Enqueue a video. Returns True if newly inserted."""
-        cur = self._conn.execute(
-            "INSERT OR IGNORE INTO videos (platform, video_id, url, status, added_at)"
-            " VALUES (?, ?, ?, 'pending', ?)",
-            (ref.platform, ref.video_id, ref.url, datetime.now().isoformat()),
-        )
-        self._conn.commit()
-        return cur.rowcount > 0
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT OR IGNORE INTO videos (platform, video_id, url, status, added_at)"
+                " VALUES (?, ?, ?, 'pending', ?)",
+                (ref.platform, ref.video_id, ref.url, datetime.now().isoformat()),
+            )
+            self._conn.commit()
+            return cur.rowcount > 0
 
     def list_pending(
         self, retry_failed: bool = False, limit: int | None = None
@@ -111,19 +115,32 @@ class Storage:
         if limit is not None:
             sql += " LIMIT ?"
             params.append(limit)
-        return list(self._conn.execute(sql, params))
+        with self._lock:
+            return list(self._conn.execute(sql, params))
 
     def mark_failed(self, pk: int, error: str) -> None:
-        self._conn.execute(
-            "UPDATE videos SET status='failed', error=?, processed_at=? WHERE pk=?",
-            (error[:2000], datetime.now().isoformat(), pk),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                "UPDATE videos SET status='failed', error=?, processed_at=? WHERE pk=?",
+                (error[:2000], datetime.now().isoformat(), pk),
+            )
+            self._conn.commit()
 
     def save_result(
         self, pk: int, fetched: FetchedVideo, transcript: str, analysis: Analysis
     ) -> None:
         with self._tx() as conn:
+            # A short/photo ref may have resolved to a canonical id that already
+            # exists in another row — same video. Merge onto that row instead of
+            # hitting the UNIQUE(platform, video_id) constraint.
+            existing = conn.execute(
+                "SELECT pk FROM videos WHERE platform=? AND video_id=? AND pk != ?",
+                (fetched.ref.platform, fetched.ref.video_id, pk),
+            ).fetchone()
+            if existing is not None:
+                conn.execute("DELETE FROM videos_fts WHERE rowid=?", (pk,))
+                conn.execute("DELETE FROM videos WHERE pk=?", (pk,))
+                pk = int(existing["pk"])
             conn.execute(
                 """UPDATE videos SET video_id=?, url=?, author=?, title=?, description=?,
                    upload_date=?, duration=?, transcript=?, category=?, summary=?,
@@ -190,44 +207,47 @@ class Storage:
         )
 
     def record_usage(self, model: str, purpose: str, usage: Usage) -> None:
-        self._conn.execute(
-            "INSERT INTO usage (ts, model, purpose, prompt_tokens, completion_tokens)"
-            " VALUES (?,?,?,?,?)",
-            (
-                datetime.now().isoformat(),
-                model,
-                purpose,
-                usage.prompt_tokens,
-                usage.completion_tokens,
-            ),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO usage (ts, model, purpose, prompt_tokens, completion_tokens)"
+                " VALUES (?,?,?,?,?)",
+                (
+                    datetime.now().isoformat(),
+                    model,
+                    purpose,
+                    usage.prompt_tokens,
+                    usage.completion_tokens,
+                ),
+            )
+            self._conn.commit()
 
     # --- reads ----------------------------------------------------------------
 
     def get(self, pk: int) -> dict[str, Any] | None:
-        row = self._conn.execute("SELECT * FROM videos WHERE pk=?", (pk,)).fetchone()
-        return self._row_to_dict(row) if row else None
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM videos WHERE pk=?", (pk,)).fetchone()
+            return self._row_to_dict(row) if row else None
 
     def counts(self) -> dict[str, Any]:
-        by_status = {
-            r[0]: r[1]
-            for r in self._conn.execute("SELECT status, COUNT(*) FROM videos GROUP BY status")
-        }
-        by_category = {
-            r[0] or "(none)": r[1]
-            for r in self._conn.execute(
-                "SELECT category, COUNT(*) FROM videos GROUP BY category ORDER BY 2 DESC"
-            )
-        }
-        tokens = [
-            dict(r)
-            for r in self._conn.execute(
-                "SELECT model, purpose, SUM(prompt_tokens) AS prompt_tokens,"
-                " SUM(completion_tokens) AS completion_tokens FROM usage"
-                " GROUP BY model, purpose"
-            )
-        ]
+        with self._lock:
+            by_status = {
+                r[0]: r[1]
+                for r in self._conn.execute("SELECT status, COUNT(*) FROM videos GROUP BY status")
+            }
+            by_category = {
+                r[0] or "(none)": r[1]
+                for r in self._conn.execute(
+                    "SELECT category, COUNT(*) FROM videos GROUP BY category ORDER BY 2 DESC"
+                )
+            }
+            tokens = [
+                dict(r)
+                for r in self._conn.execute(
+                    "SELECT model, purpose, SUM(prompt_tokens) AS prompt_tokens,"
+                    " SUM(completion_tokens) AS completion_tokens FROM usage"
+                    " GROUP BY model, purpose"
+                )
+            ]
         return {"by_status": by_status, "by_category": by_category, "usage": tokens}
 
     def _row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
@@ -249,9 +269,12 @@ class Storage:
             )
         ]
         d["tags"] = []
+        d["key_points"] = []
         if d.get("analysis_json"):
             try:
-                d["tags"] = json.loads(d["analysis_json"]).get("tags") or []
+                parsed = json.loads(d["analysis_json"])
+                d["tags"] = parsed.get("tags") or []
+                d["key_points"] = parsed.get("key_points") or []
             except json.JSONDecodeError:
                 pass
         d.pop("analysis_json", None)
@@ -266,6 +289,7 @@ class Storage:
         keywords: list[str] | None = None,
         date_from: str | None = None,
         date_to: str | None = None,
+        match_any: bool = False,
         limit: int = 40,
         done_only: bool = True,
     ) -> list[dict[str, Any]]:
@@ -314,32 +338,45 @@ class Storage:
             tokens = [re.sub(r"[^\w'-]+", " ", k).split() for k in keywords]
             flat = [t for sub in tokens for t in sub if t]
             if flat:
-                match = " ".join(_quote_fts(t) for t in flat)
+                op = " OR " if match_any else " "
+                match = op.join(_quote_fts(t) for t in flat)
                 join = " JOIN videos_fts f ON f.rowid = v.pk"
                 where.append("videos_fts MATCH ?")
                 params.append(match)
         sql = "SELECT DISTINCT v.* FROM videos v" + join
         if where:
             sql += " WHERE " + " AND ".join(where)
-        sql += " ORDER BY v.pk DESC LIMIT ?"
-        params.append(limit)
-        try:
-            rows = self._conn.execute(sql, params).fetchall()
-        except sqlite3.OperationalError:
-            # FTS syntax edge cases must never crash the search — retry without FTS.
-            if not keywords:
-                raise
-            return self.search(
-                categories=categories,
-                city=city,
-                upcoming_only=upcoming_only,
-                today=today,
-                keywords=None,
-                date_from=date_from,
-                date_to=date_to,
-                limit=limit,
-                done_only=done_only,
+        if upcoming_only:
+            # soonest relevant event first; undated events last
+            soonest = (
+                "(SELECT MIN(COALESCE(e2.start_date, e2.end_date)) FROM events e2"
+                " WHERE e2.video_pk=v.pk AND COALESCE(e2.end_date, e2.start_date) >= ?)"
             )
+            sql += f" ORDER BY {soonest} IS NULL, {soonest} ASC"
+            params.extend([today_s, today_s])
+        else:
+            sql += " ORDER BY v.pk DESC"
+        sql += " LIMIT ?"
+        params.append(limit)
+        with self._lock:
+            try:
+                rows = self._conn.execute(sql, params).fetchall()
+            except sqlite3.OperationalError:
+                # FTS syntax edge cases must never crash the search — retry without FTS.
+                if not keywords:
+                    raise
+                return self.search(
+                    categories=categories,
+                    city=city,
+                    upcoming_only=upcoming_only,
+                    today=today,
+                    keywords=None,
+                    date_from=date_from,
+                    date_to=date_to,
+                    match_any=match_any,
+                    limit=limit,
+                    done_only=done_only,
+                )
         results = [self._row_to_dict(r) for r in rows]
         for d in results:
             d["has_undated_event"] = any(

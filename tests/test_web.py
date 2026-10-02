@@ -28,6 +28,47 @@ def test_ask(client, fake_llm):
     assert res.json()["answer"] == "nothing saved yet"
 
 
+def test_ask_returns_videos(client, storage, fake_llm):
+    from reelmind.models import Analysis, FetchedVideo, VideoRef
+
+    storage.add_pending(VideoRef(platform="tiktok", video_id="1", url="u1"))
+    pk = storage.list_pending()[0]["pk"]
+    storage.save_result(
+        pk,
+        FetchedVideo(ref=VideoRef(platform="tiktok", video_id="1", url="u1")),
+        "t",
+        Analysis.model_validate(valid_analysis_dict()),
+    )
+    fake_llm.json_responses = [{"categories": ["restaurant"], "keywords": ["ramen"]}]
+    fake_llm.text_responses = ["Try Ramen-Ya"]
+    res = client.post("/api/ask", json={"question": "restaurants?"})
+    body = res.json()
+    assert body["answer"] == "Try Ramen-Ya"
+    assert len(body["videos"]) == 1
+    assert body["videos"][0]["title"] == "Great ramen spot"
+    assert body["videos"][0]["key_points"] == ["cash only"]
+
+
+def test_config_endpoint(client):
+    res = client.get("/api/config")
+    assert res.status_code == 200
+    body = res.json()
+    assert "restaurant" in body["categories"]
+    assert body["home_location"] is None
+
+
+def test_add_counts_lists(client, storage):
+    res = client.post(
+        "/api/add",
+        json={
+            "urls": ["https://fake.example/v/1", "https://fake.example/list", "https://nope.com"]
+        },
+    )
+    body = res.json()
+    assert body["queued"] == 1
+    assert body["lists"] == 1
+
+
 def test_videos_filters(client, storage):
     from reelmind.models import Analysis, FetchedVideo, VideoRef
 
@@ -54,7 +95,7 @@ def test_videos_filters(client, storage):
 
 def test_add_enqueues(client, storage):
     res = client.post(
-        "/api/add", json={"urls": ["https://www.tiktok.com/@a/video/123", "https://nope.com/x", ""]}
+        "/api/add", json={"urls": ["https://fake.example/v/123", "https://nope.com/x", ""]}
     )
     assert res.status_code == 200
     assert res.json()["queued"] == 1

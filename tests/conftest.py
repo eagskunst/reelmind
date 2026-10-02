@@ -50,10 +50,15 @@ class FakePlatform(Platform):
     name = "fake"
 
     def __init__(
-        self, fetched: FetchedVideo | None = None, fail_on: set[str] | None = None
+        self,
+        fetched: FetchedVideo | None = None,
+        fail_on: set[str] | None = None,
+        canonical_map: dict[str, str] | None = None,
     ) -> None:
         self.fetched = fetched
         self.fail_on = fail_on or set()
+        # video_id -> canonical video_id, simulating short-link resolution
+        self.canonical_map = canonical_map or {}
         self.downloads: list[str] = []
 
     def matches(self, url: str) -> bool:
@@ -62,12 +67,26 @@ class FakePlatform(Platform):
     def parse(self, url: str) -> VideoRef | None:
         if not self.matches(url):
             return None
-        return VideoRef(platform=self.name, video_id=url.rstrip("/").rsplit("/", 1)[-1], url=url)
+        vid = url.rstrip("/").rsplit("/", 1)[-1]
+        if vid == "list":
+            return None  # list URL -> expand()
+        return VideoRef(platform=self.name, video_id=vid, url=url)
+
+    def expand(self, url: str, cfg: Config) -> list[VideoRef]:
+        return [
+            VideoRef(
+                platform=self.name,
+                video_id="listitem",
+                url="https://fake.example/v/listitem",
+            )
+        ]
 
     def download(self, ref: VideoRef, workdir: Path, cfg: Config) -> FetchedVideo:
         self.downloads.append(ref.url)
         if ref.url in self.fail_on:
             raise RuntimeError("boom")
+        if ref.video_id in self.canonical_map:
+            ref = ref.model_copy(update={"video_id": self.canonical_map[ref.video_id]})
         if self.fetched is not None:
             return self.fetched
         media = workdir / "media.mp4"

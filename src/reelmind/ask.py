@@ -134,6 +134,7 @@ def ask(
             keywords=p.keywords or None,
             date_from=p.date_from,
             date_to=p.date_to,
+            match_any=True,  # planner keywords are recall hints, OR them
         )
 
     candidates = run(plan)
