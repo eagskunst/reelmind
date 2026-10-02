@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>reelmind</title>
+<style>
+  :root { --bg:#fafafa; --fg:#1a1a1a; --muted:#666; --accent:#4f46e5; --card:#fff; --border:#e5e5e5; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#111; --fg:#eee; --muted:#999; --card:#1c1c1e; --border:#333; --accent:#818cf8; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,-apple-system,sans-serif; background:var(--bg); color:var(--fg); }
+  main { max-width:860px; margin:0 auto; padding:1.5rem 1rem 4rem; }
+  h1 { font-size:1.4rem; margin:0 0 1rem; }
+  .askbox { display:flex; gap:.5rem; }
+  .askbox input { flex:1; padding:.75rem 1rem; font-size:1rem; border:1px solid var(--border); border-radius:.6rem; background:var(--card); color:var(--fg); }
+  button { padding:.6rem 1rem; border:0; border-radius:.6rem; background:var(--accent); color:#fff; cursor:pointer; font-size:.95rem; }
+  button:disabled { opacity:.5; }
+  #answer { margin-top:1rem; padding:1rem; background:var(--card); border:1px solid var(--border); border-radius:.6rem; white-space:pre-wrap; display:none; }
+  .bar { display:flex; flex-wrap:wrap; gap:.5rem; margin:1.25rem 0; align-items:center; }
+  .chips { display:flex; flex-wrap:wrap; gap:.4rem; }
+  .chip { padding:.3rem .8rem; border:1px solid var(--border); border-radius:999px; background:var(--card); color:var(--fg); cursor:pointer; font-size:.85rem; }
+  .chip.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .bar input[type=search] { padding:.45rem .8rem; border:1px solid var(--border); border-radius:.6rem; background:var(--card); color:var(--fg); }
+  details.add { margin:1rem 0; }
+  details.add textarea { width:100%; min-height:5rem; margin-top:.5rem; padding:.5rem; border:1px solid var(--border); border-radius:.5rem; background:var(--card); color:var(--fg); font-family:inherit; }
+  .grid { display:grid; gap:.8rem; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); margin-top:1rem; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:.7rem; padding:.9rem; }
+  .card h3 { margin:0 0 .3rem; font-size:1rem; }
+  .badge { display:inline-block; font-size:.7rem; text-transform:uppercase; letter-spacing:.05em; background:var(--accent); color:#fff; padding:.15rem .5rem; border-radius:.4rem; margin-bottom:.4rem; }
+  .card p { margin:.3rem 0; font-size:.88rem; color:var(--muted); }
+  .card ul { margin:.3rem 0; padding-left:1.1rem; font-size:.85rem; }
+  .card a { color:var(--accent); font-size:.85rem; word-break:break-all; }
+  .undated { color:#b45309; font-size:.8rem; }
+  #status { font-size:.8rem; color:var(--muted); margin-top:.5rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>reelmind</h1>
+
+  <div class="askbox">
+    <input id="q" type="text" placeholder="Ask about your saved videos… e.g. what restaurant can I go to?">
+    <button id="askBtn">Ask</button>
+  </div>
+  <div id="answer"></div>
+
+  <details class="add">
+    <summary>Add links</summary>
+    <textarea id="addUrls" placeholder="One URL per line (video or list/collection links)"></textarea>
+    <button id="addBtn">Add</button>
+    <div id="status"></div>
+  </details>
+
+  <div class="bar">
+    <div class="chips" id="chips"></div>
+    <input id="search" type="search" placeholder="Search…">
+    <label style="font-size:.85rem"><input id="upcoming" type="checkbox"> upcoming events</label>
+  </div>
+
+  <div class="grid" id="grid"></div>
+</main>
+<script>
+const grid = document.getElementById('grid');
+const chips = document.getElementById('chips');
+const search = document.getElementById('search');
+const upcoming = document.getElementById('upcoming');
+let activeCat = null;
+const cats = ["restaurant","cafe_bar","event","travel_place","activity","recipe","shopping","other"];
+
+cats.forEach(c => {
+  const b = document.createElement('button');
+  b.className = 'chip'; b.textContent = c.replace('_',' ');
+  b.onclick = () => { activeCat = (activeCat === c ? null : c);
+    [...chips.children].forEach(x => x.classList.toggle('active', x.textContent.replace(' ','_') === activeCat));
+    load(); };
+  chips.appendChild(b);
+});
+
+function esc(s){ const d=document.createElement('div'); d.textContent=s??''; return d.innerHTML; }
+
+async function load() {
+  const p = new URLSearchParams();
+  if (activeCat) p.set('category', activeCat);
+  if (search.value) p.set('q', search.value);
+  if (upcoming.checked) p.set('upcoming', 'true');
+  const res = await fetch('/api/videos?' + p);
+  const vids = await res.json();
+  grid.innerHTML = vids.map(v => `
+    <div class="card">
+      <span class="badge">${esc(v.category)}</span>
+      <h3>${esc(v.title || v.url)}</h3>
+      <p>${esc(v.summary)}</p>
+      ${v.places?.length ? `<ul>${v.places.map(p=>`<li>📍 ${esc(p.name)}${p.city?', '+esc(p.city):''}</li>`).join('')}</ul>` : ''}
+      ${v.events?.length ? `<ul>${v.events.map(e=>`<li>🗓 ${esc(e.name)}${e.start_date?' — '+esc(e.start_date):''}${(!e.start_date&&!e.end_date)?' <span class="undated">(date unknown)</span>':''}${e.city?', '+esc(e.city):''}</li>`).join('')}</ul>` : ''}
+      <a href="${esc(v.url)}" target="_blank" rel="noopener">open video ↗</a>
+    </div>`).join('') || '<p>No videos yet. Add some links above.</p>';
+}
+
+document.getElementById('askBtn').onclick = async () => {
+  const q = document.getElementById('q').value.trim();
+  if (!q) return;
+  const box = document.getElementById('answer');
+  box.style.display = 'block'; box.textContent = 'Thinking…';
+  const res = await fetch('/api/ask', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({question:q})});
+  const data = await res.json();
+  box.textContent = data.answer;
+};
+
+document.getElementById('addBtn').onclick = async () => {
+  const urls = document.getElementById('addUrls').value.split('\n').map(s=>s.trim()).filter(Boolean);
+  if (!urls.length) return;
+  const res = await fetch('/api/add', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({urls})});
+  const data = await res.json();
+  document.getElementById('status').textContent = `Enqueued ${data.enqueued} new video(s). Processing in background…`;
+  document.getElementById('addUrls').value = '';
+  setTimeout(load, 3000);
+};
+
+search.addEventListener('input', () => load());
+upcoming.addEventListener('change', () => load());
+load();
+</script>
+</body>
+</html>
