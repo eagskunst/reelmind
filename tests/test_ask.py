@@ -67,6 +67,14 @@ def test_planner_prompt_bilingual_keywords(cfg, storage, fake_llm):
     assert "original language" in plan_prompt
 
 
+def test_ask_empty_result_has_no_relaxation(storage, cfg, fake_llm):
+    fake_llm.json_responses = [{"categories": ["restaurant"], "city": "Madrid"}]
+    result = ask("restaurants?", cfg, storage, fake_llm)
+    assert "Nothing in your saved videos" in result.answer
+    assert result.relaxed is None
+    assert result.video_ids == []
+
+
 def test_query_plan_defaults():
     p = QueryPlan.model_validate({})
     assert p.categories == [] and p.upcoming_only is False and p.city is None

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 
 class VideoRef(BaseModel):
@@ -27,6 +28,19 @@ class FetchedVideo(BaseModel):
     raw_meta: dict[str, Any] = Field(default_factory=dict)
 
 
+_EMPTY_STRINGS = {"", "null", "none", "unknown", "n/a"}
+_ISO_DATE = r"^\d{4}-\d{2}-\d{2}$"
+
+
+def _clean_str(value: Any) -> Any:
+    """LLMs emit "unknown"/""/null-ish strings for missing fields -> normalize to None."""
+    if isinstance(value, str):
+        value = value.strip()
+        if value.lower() in _EMPTY_STRINGS:
+            return None
+    return value
+
+
 class Place(BaseModel):
     name: str
     kind: str | None = None  # e.g. cuisine / place type
@@ -35,6 +49,11 @@ class Place(BaseModel):
     country: str | None = None
     price_range: str | None = None
     notes: str | None = None
+
+    @field_validator("kind", "address", "city", "country", "price_range", "notes", mode="before")
+    @classmethod
+    def _str_or_none(cls, v: Any) -> Any:
+        return _clean_str(v)
 
 
 class Event(BaseModel):
@@ -46,6 +65,18 @@ class Event(BaseModel):
     time: str | None = None
     price: str | None = None
     notes: str | None = None
+
+    @field_validator(
+        "venue", "city", "start_date", "end_date", "time", "price", "notes", mode="before"
+    )
+    @classmethod
+    def _str_or_none(cls, v: Any, info: ValidationInfo) -> Any:
+        v = _clean_str(v)
+        # dates must be ISO or storage's string comparisons break
+        if info.field_name in ("start_date", "end_date") and isinstance(v, str):
+            if not re.match(_ISO_DATE, v):
+                return None
+        return v
 
 
 class Analysis(BaseModel):

@@ -15,7 +15,7 @@ from typing import Any
 from reelmind.llm import Usage
 from reelmind.models import Analysis, FetchedVideo, VideoRef
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS videos (
@@ -90,8 +90,16 @@ class Storage:
         version = self._conn.execute("PRAGMA user_version").fetchone()[0]
         if version < 1:
             self._conn.executescript(_SCHEMA)
-            self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-            self._conn.commit()
+        if version < 2:
+            # LLMs used to store "" for unknown event dates — normalize to NULL
+            self._conn.execute(
+                "UPDATE events SET start_date=NULL WHERE trim(coalesce(start_date,''))=''"
+            )
+            self._conn.execute(
+                "UPDATE events SET end_date=NULL WHERE trim(coalesce(end_date,''))=''"
+            )
+        self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        self._conn.commit()
 
     # --- writes ---------------------------------------------------------------
 
